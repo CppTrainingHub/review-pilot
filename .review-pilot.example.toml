@@ -1,0 +1,39 @@
+# Example project configuration for review-pilot.
+
+ignore_paths = [
+  "generated/**",
+  "vendor/",
+]
+
+[rules."rule.file-too-large"]
+enabled = true
+max_added_lines = 200
+
+[rules."rule.change-too-large"]
+enabled = true
+max_total_added_lines = 400
+
+[rules."rule.missing-tests"]
+enabled = true
+
+[rules."rule.debug-output"]
+enabled = true
+patterns = ["console.log(", "debugger;", "pdb.set_trace(", "print("]
+
+[rules."rule.sensitive-path"]
+enabled = true
+markers = [
+  ".github/workflows/",
+  "dockerfile",
+  "requirements.txt",
+  "pyproject.toml",
+  "package.json",
+  "infra/",
+  "deploy/",
+  "migrations/",
+]
+
+[tools.semgrep]
+enabled = false
+timeout_seconds = 30
+severity_threshold = "P2"

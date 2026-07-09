@@ -1,0 +1,15 @@
+diff --git a/app.py b/app.py
+index 9daeafb..10b1290 100644
+--- a/app.py
++++ b/app.py
+@@ -1,4 +1,4 @@
+ def greet(name):
+-    return 'hello ' + name
++    return f'hello {name}'
+ 
+ def main():
+@@ -8,3 +8,4 @@ def main():
+     user = 'Ada'
+     message = greet(user)
+     print(message)
++    return message

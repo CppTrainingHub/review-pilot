@@ -1,0 +1,8 @@
+diff --git a/old.py b/old.py
+deleted file mode 100644
+index 2c99a52..0000000
+--- a/old.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-legacy = True
+-print(legacy)

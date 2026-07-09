@@ -1,0 +1,18 @@
+{
+  "schema_version": "review-pilot.llm-findings.v1",
+  "findings": [
+    {
+      "message": "A missing file contains an unsafe branch.",
+      "file_path": "src/missing.py",
+      "line_no": 99,
+      "severity": "P1",
+      "category": "bug",
+      "source": "llm",
+      "confidence": "high",
+      "evidence": {
+        "reason": "The missing line appears to skip validation."
+      },
+      "suggestion": "Add validation before the branch."
+    }
+  ]
+}

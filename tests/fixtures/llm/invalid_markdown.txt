@@ -1,0 +1,6 @@
+```json
+{
+  "schema_version": "review-pilot.llm-findings.v1",
+  "findings": []
+}
+```

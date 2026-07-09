@@ -1,0 +1,9 @@
+diff --git a/old_name.py b/new_name.py
+similarity index 82%
+rename from old_name.py
+rename to new_name.py
+index e69de29..9daeafb 100644
+--- a/old_name.py
++++ b/new_name.py
+@@ -0,0 +1 @@
++name = 'review-pilot'

@@ -1,0 +1,23 @@
+{
+  "html_url": "https://github.com/octo-org/review-demo/pull/42",
+  "title": "Tighten review output",
+  "state": "open",
+  "base": {
+    "label": "octo-org:main",
+    "ref": "main",
+    "sha": "1111111111111111111111111111111111111111",
+    "repo": {
+      "full_name": "octo-org/review-demo",
+      "clone_url": "https://github.com/octo-org/review-demo.git"
+    }
+  },
+  "head": {
+    "label": "contrib:review-output",
+    "ref": "review-output",
+    "sha": "2222222222222222222222222222222222222222",
+    "repo": {
+      "full_name": "contrib/review-demo",
+      "clone_url": "https://github.com/contrib/review-demo.git"
+    }
+  }
+}

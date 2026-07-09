@@ -1,0 +1,18 @@
+{
+  "schema_version": "review-pilot.llm-findings.v1",
+  "findings": [
+    {
+      "message": "The helper return value may need a stronger contract.",
+      "file_path": "src/helper.py",
+      "line_no": 2,
+      "severity": "P2",
+      "category": "maintainability",
+      "source": "llm",
+      "confidence": "high",
+      "evidence": {
+        "reason": "The changed function imports this helper."
+      },
+      "suggestion": "Document or test the helper return contract."
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "filename": "src/review.py",
+    "status": "modified",
+    "additions": 2,
+    "deletions": 1,
+    "changes": 3,
+    "patch": "@@ -1,3 +1,4 @@\n def review():\n-    print('debug')\n+    result = build_report()\n+    return result\n"
+  },
+  {
+    "filename": "tests/test_review.py",
+    "status": "added",
+    "additions": 2,
+    "deletions": 0,
+    "changes": 2,
+    "patch": "@@ -0,0 +1,2 @@\n+def test_review():\n+    assert True\n"
+  }
+]

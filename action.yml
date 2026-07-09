@@ -1,0 +1,48 @@
+name: "review-pilot"
+description: "Run review-pilot on a GitHub pull request and upload review artifacts."
+inputs:
+  event-path:
+    description: "Path to the GitHub event JSON."
+    required: false
+    default: "${{ github.event_path }}"
+  output-dir:
+    description: "Directory that receives review-report.md and review-report.json."
+    required: false
+    default: "review-pilot-artifacts"
+  fail-on:
+    description: "Optional severity threshold: P0, P1, P2, or P3."
+    required: false
+    default: ""
+  dry-run:
+    description: "Use dry-run mode without cloning remote workspace or posting comments."
+    required: false
+    default: "true"
+  post-summary-comment:
+    description: "Publish or preview the PR summary comment."
+    required: false
+    default: "false"
+  report-url:
+    description: "Optional full report URL shown in summary comment or notification."
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Run review-pilot
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(github-action --event-path "${{ inputs.event-path }}" --output-dir "${{ inputs.output-dir }}")
+        if [ "${{ inputs.dry-run }}" = "true" ]; then
+          args+=(--dry-run)
+        fi
+        if [ -n "${{ inputs.fail-on }}" ]; then
+          args+=(--fail-on "${{ inputs.fail-on }}")
+        fi
+        if [ "${{ inputs.post-summary-comment }}" = "true" ]; then
+          args+=(--post-summary-comment)
+        fi
+        if [ -n "${{ inputs.report-url }}" ]; then
+          args+=(--report-url "${{ inputs.report-url }}")
+        fi
+        review-pilot "${args[@]}"

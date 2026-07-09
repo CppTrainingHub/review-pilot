@@ -1,0 +1,18 @@
+{
+  "schema_version": "review-pilot.llm-findings.v1",
+  "findings": [
+    {
+      "message": "Debug output remains in the changed code.",
+      "file_path": "src/app.py",
+      "line_no": 2,
+      "severity": "P2",
+      "category": "maintainability",
+      "source": "llm",
+      "confidence": "medium",
+      "evidence": {
+        "reason": "The changed line writes debug information during normal execution."
+      },
+      "suggestion": "Remove the debug print or route it through project logging."
+    }
+  ]
+}
