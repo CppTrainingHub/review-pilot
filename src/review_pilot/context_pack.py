@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from review_pilot.config import ReviewPilotConfig
 from review_pilot.models import ContextBudgetManifest, ParsedDiff, RepoInfo
@@ -20,6 +20,7 @@ class ReviewContextPack:
     rule_findings: tuple[Finding, ...]
     context: ContextBudgetManifest
     generated_by: dict[str, Any]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +31,7 @@ class ReviewContextPack:
             "rule_findings": [finding.to_dict() for finding in self.rule_findings],
             "context": self.context.to_dict(),
             "generated_by": self.generated_by,
+            "metadata": dict(self.metadata),
         }
 
 
@@ -40,6 +42,7 @@ def build_review_context_pack(
     parsed_diff: ParsedDiff,
     rule_findings: list[Finding],
     context: ContextBudgetManifest,
+    metadata: Mapping[str, Any] | None = None,
 ) -> ReviewContextPack:
     return ReviewContextPack(
         schema_version=CONTEXT_PACK_SCHEMA_VERSION,
@@ -57,7 +60,9 @@ def build_review_context_pack(
         generated_by={
             "tool": "review-pilot",
             "command": "context-pack",
+            **(dict(metadata) if metadata else {}),
         },
+        metadata=dict(metadata or {}),
     )
 
 

@@ -57,6 +57,22 @@ def test_parse_gitlab_mr_url_accepts_canonical_url() -> None:
     assert parsed.iid == 7
 
 
+def test_fetch_pull_request_uses_the_gitlab_host_from_the_url(monkeypatch) -> None:
+    monkeypatch.delenv("GITLAB_API_BASE_URL", raising=False)
+    monkeypatch.delenv("CI_API_V4_URL", raising=False)
+    transport = FakeTransport()
+    provider = GitLabProvider(token="glpat_secret", transport=transport)
+
+    provider.fetch_pull_request(
+        "http://git.cpptrain.top/cpp-camp/speed-logger/-/merge_requests/7"
+    )
+
+    assert all(
+        request.full_url.startswith("http://git.cpptrain.top/api/v4/")
+        for request in transport.requests
+    )
+
+
 def test_parse_gitlab_mr_url_rejects_non_mr_url() -> None:
     with pytest.raises(GitProviderError, match="expected GitLab MR URL"):
         parse_gitlab_mr_url("https://gitlab.com/cpp-camp/speed-logger/-/issues/7")

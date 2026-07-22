@@ -31,16 +31,62 @@ class StructuredReviewResult:
 @dataclass(frozen=True)
 class StructuredReviewer:
     provider: LLMProvider
+    snippet_location: bool = False
 
     def review(
         self,
         context_pack: ReviewContextPack,
+        *,
+        snippet_location: bool | None = None,
     ) -> StructuredReviewResult:
-        response = self.provider.review(context_pack)
-        envelope = parse_llm_findings(response.content)
+        enabled = self.snippet_location if snippet_location is None else snippet_location
+        if enabled:
+            specialized = getattr(self.provider, "review_with_snippet_location", None)
+            response = (
+                specialized(context_pack)
+                if callable(specialized)
+                else self.provider.review(context_pack)
+            )
+        else:
+            response = self.provider.review(context_pack)
+        return self.parse_response(
+            response,
+            context_pack,
+            snippet_location=enabled,
+        )
+
+    def review_with_tools(
+        self,
+        context_pack: ReviewContextPack,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        return self.provider.review_with_tools(
+            context_pack,
+            messages,
+            tools,
+            max_tokens=max_tokens,
+        )
+
+    @staticmethod
+    def parse_response(
+        response: LLMResponse,
+        context_pack: ReviewContextPack,
+        *,
+        snippet_location: bool = False,
+    ) -> StructuredReviewResult:
+        if response.tool_calls:
+            raise ValueError("tool-call response must be resolved before parsing findings")
+        envelope = parse_llm_findings(
+            response.content,
+            require_existing_code=snippet_location,
+        )
         evidence = guard_llm_findings(
             envelope.findings,
             context_pack,
+            snippet_location=snippet_location,
         )
         return StructuredReviewResult(
             response=response,

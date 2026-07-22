@@ -76,6 +76,11 @@ def test_run_gitlab_ci_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert result.markdown_path.exists()
     payload = json.loads(result.json_path.read_text(encoding="utf-8"))
     assert payload["repo_info"]["pipeline"] == "gitlab-ci"
+    report = json.loads(
+        (tmp_path / "artifacts" / "review-report.json").read_text(encoding="utf-8")
+    )
+    assert report["repo_info"]["engine"] == "review-engine"
+    assert report["repo_info"]["input_source"] == "gitlab-mr"
     assert payload["repo_info"]["project_id"] == "84181645"
     assert payload["repo_info"]["repository"] == "cpp-camp/speed-logger"
     assert payload["repo_info"]["pull_request"] == 7

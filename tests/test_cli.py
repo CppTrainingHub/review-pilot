@@ -357,7 +357,7 @@ def test_review_pr_dry_run_outputs_pr_and_workspace_plan(monkeypatch) -> None:
     assert stderr == ""
 
 
-def test_review_pr_requires_no_ai_for_input_preparation() -> None:
+def test_review_pr_requires_no_ai() -> None:
     exit_code, stdout, stderr = run_cli(
         [
             "review-pr",

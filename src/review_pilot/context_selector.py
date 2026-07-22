@@ -17,6 +17,7 @@ from review_pilot.models import (
 PRIORITY_CHANGED = 0
 PRIORITY_RELATED_TEST = 10
 PRIORITY_LOCAL_IMPORT = 20
+PRIORITY_SAME_DIRECTORY = 25
 PRIORITY_PROJECT_DOC = 40
 PRIORITY_PROJECT_CONFIG = 50
 
@@ -93,6 +94,15 @@ def select_context_candidates(
                     ),
                 ),
             )
+        for sibling in related_sibling_files(index, indexed_file):
+            _add_candidate(
+                candidates,
+                _candidate_from_file(
+                    sibling,
+                    reason="same_directory_related",
+                    priority=PRIORITY_SAME_DIRECTORY,
+                ),
+            )
 
     for file in index.files:
         name = PurePosixPath(file.path).name.lower()
@@ -138,6 +148,60 @@ def related_test_files(index: CodeIndex, changed_file: IndexedFile) -> tuple[Ind
         if test_dir == changed_dir:
             matches.append(file)
     return tuple(sorted(dict.fromkeys(matches), key=lambda file: file.path))
+
+
+def related_sibling_files(
+    index: CodeIndex,
+    changed_file: IndexedFile,
+) -> tuple[IndexedFile, ...]:
+    """Find same-directory interface/implementation companions.
+
+    The rule is intentionally narrow: it accepts the same stem or a common
+    stem family such as ``parser``/``parser_impl``.  It does not pull an
+    entire directory into one review unit.
+    """
+
+    changed_stem = stem_for_matching(changed_file.path).lower()
+    changed_dir = PurePosixPath(changed_file.path).parent
+    matches: list[IndexedFile] = []
+    for file in index.files:
+        if file.path == changed_file.path or file.is_test:
+            continue
+        if PurePosixPath(file.path).parent != changed_dir:
+            continue
+        sibling_stem = stem_for_matching(file.path).lower()
+        if _same_stem_family(changed_stem, sibling_stem):
+            matches.append(file)
+    return tuple(sorted(dict.fromkeys(matches), key=lambda file: file.path))
+
+
+def _same_stem_family(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    suffixes = (
+        "_impl",
+        "_implementation",
+        "_interface",
+        "_iface",
+        "_base",
+        "_detail",
+        "_model",
+        "_controller",
+    )
+    left_base = _remove_known_sibling_suffix(left, suffixes)
+    right_base = _remove_known_sibling_suffix(right, suffixes)
+    return left_base == right_base and (
+        left_base != left or right_base != right
+    )
+
+
+def _remove_known_sibling_suffix(value: str, suffixes: tuple[str, ...]) -> str:
+    for suffix in suffixes:
+        if value.endswith(suffix) and len(value) > len(suffix):
+            return value[: -len(suffix)]
+    return value
 
 
 def _candidate_from_file(

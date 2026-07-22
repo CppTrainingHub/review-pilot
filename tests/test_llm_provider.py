@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from http.client import IncompleteRead
 import urllib.error
 from pathlib import Path
 
@@ -150,6 +151,105 @@ def test_openai_compatible_provider_builds_request_and_parses_response(
     assert "review-pilot.llm-findings.v1" in payload["messages"][1]["content"]
 
 
+def test_openai_compatible_reflection_requests_json_object(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "schema_version": "review-pilot.reflection.v1",
+                                    "decision": "keep",
+                                    "reason": "证据足够。",
+                                    "severity": None,
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 9},
+            }
+        )
+
+    provider = OpenAICompatibleProvider(
+        LLMConfig(
+            provider="openai-compatible",
+            model="review-model",
+            base_url="https://llm.example/v1",
+            api_key="secret-value",
+        ),
+        urlopen=fake_urlopen,
+    )
+    pack = _context_pack(tmp_path)
+    from review_pilot.evidence_guard import guard_llm_findings
+    from review_pilot.report_models import Finding
+
+    finding = Finding(
+        message="变更行为需要边界测试。",
+        file_path="src/service.py",
+        line_no=2,
+        severity="P2",
+        category="bug",
+        source="llm",
+        confidence="low",
+    )
+    provider.reflect_finding(
+        finding=finding,
+        context_pack=pack,
+        evidence=guard_llm_findings((finding,), pack),
+    )
+
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_openai_compatible_final_tool_request_limits_json_output(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"schema_version":"review-pilot.llm-findings.v1","findings":[]}',
+                        }
+                    }
+                ]
+            }
+        )
+
+    provider = OpenAICompatibleProvider(
+        LLMConfig(
+            provider="openai-compatible",
+            model="review-model",
+            base_url="https://llm.example/v1",
+            api_key="secret-value",
+        ),
+        urlopen=fake_urlopen,
+    )
+
+    provider.review_with_tools(
+        _context_pack(tmp_path),
+        [{"role": "user", "content": "Return the final JSON."}],
+        [],
+        max_tokens=4096,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["max_tokens"] == 4096
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def test_openai_compatible_provider_normalizes_network_failure(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +269,26 @@ def test_openai_compatible_provider_normalizes_network_failure(
     with pytest.raises(LLMRequestError, match="offline") as error:
         provider.review(_context_pack(tmp_path))
     assert "secret-value" not in str(error.value)
+
+
+def test_openai_compatible_provider_normalizes_incomplete_http_response(
+    tmp_path: Path,
+) -> None:
+    def interrupted_urlopen(request, timeout):
+        raise IncompleteRead(b"partial")
+
+    provider = OpenAICompatibleProvider(
+        LLMConfig(
+            provider="openai-compatible",
+            model="review-model",
+            base_url="https://llm.example/v1",
+            api_key="secret-value",
+        ),
+        urlopen=interrupted_urlopen,
+    )
+
+    with pytest.raises(LLMRequestError, match="llm request failed"):
+        provider.review(_context_pack(tmp_path))
 
 
 def test_openai_compatible_provider_rejects_invalid_json(tmp_path: Path) -> None:

@@ -31,6 +31,8 @@ def test_pipeline_no_ai_builds_final_report(tmp_path: Path, monkeypatch) -> None
     assert result.exit_code == 0
     assert payload["repo_info"]["profile"] == "manual"
     assert payload["repo_info"]["pipeline"] == "local-staged"
+    assert payload["repo_info"]["engine"] == "review-engine"
+    assert payload["repo_info"]["input_source"] == "local-staged"
     assert payload["repo_info"]["ai_enabled"] is False
     assert payload["merge_summary"]["source_counts"] == {"rule": 2}
     assert "rule.debug-output" in rule_ids
@@ -130,6 +132,32 @@ def test_pipeline_fail_on_returns_one(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert result.report.summary["highest_severity"] == "P2"
+
+
+def test_pipeline_debug_findings_still_writes_report_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = init_repo(tmp_path)
+    (repo / "app.py").write_text("print('debug')\n", encoding="utf-8")
+    git(repo, "add", "app.py")
+    monkeypatch.chdir(repo)
+    output = repo / "artifacts" / "review.json"
+
+    result = ReviewPipeline(
+        ReviewPipelineOptions(
+            no_ai=True,
+            output_format="json",
+            output=output,
+            debug_findings=True,
+        )
+    ).run()
+
+    assert result.debug_payload is not None
+    assert result.output_path == output
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["repo_info"]["pipeline"] == "local-staged"
+    assert payload["findings"]
 
 
 def test_pipeline_rejects_include_out_of_diff_without_tools(

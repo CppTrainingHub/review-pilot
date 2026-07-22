@@ -23,6 +23,15 @@ def test_parse_valid_llm_findings() -> None:
     assert finding.evidence == {"reason": "Debug output is executed."}
 
 
+def test_parse_non_integral_provider_line_as_unverifiable() -> None:
+    payload = _valid_payload()
+    payload["findings"][0]["line_no"] = 78.9
+
+    envelope = parse_llm_findings(json.dumps(payload))
+
+    assert envelope.findings[0].line_no is None
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
@@ -61,12 +70,13 @@ def test_parse_rejects_wrong_schema_version() -> None:
         parse_llm_findings(json.dumps(payload))
 
 
-def test_parse_rejects_empty_findings() -> None:
+def test_parse_accepts_empty_findings() -> None:
     payload = _valid_payload()
     payload["findings"] = []
 
-    with pytest.raises(LLMOutputError, match="at least one"):
-        parse_llm_findings(json.dumps(payload))
+    envelope = parse_llm_findings(json.dumps(payload))
+
+    assert envelope.findings == ()
 
 
 @pytest.mark.parametrize(
@@ -122,6 +132,33 @@ def test_parse_rejects_invalid_evidence() -> None:
     empty_reason["findings"][0]["evidence"]["reason"] = ""
     with pytest.raises(LLMOutputError, match="reason must be a non-empty string"):
         parse_llm_findings(json.dumps(empty_reason))
+
+
+def test_snippet_schema_requires_existing_code() -> None:
+    payload = _valid_payload()
+    with pytest.raises(LLMOutputError, match="existing_code"):
+        parse_llm_findings(json.dumps(payload), require_existing_code=True)
+
+    payload["findings"][0]["existing_code"] = "print('debug')"
+    envelope = parse_llm_findings(
+        json.dumps(payload),
+        require_existing_code=True,
+    )
+    assert envelope.findings[0].existing_code == "print('debug')"
+
+
+def test_snippet_schema_rejects_empty_existing_code() -> None:
+    payload = _valid_payload()
+    payload["findings"][0]["existing_code"] = "  "
+
+    with pytest.raises(LLMOutputError, match="existing_code must be a non-empty string"):
+        parse_llm_findings(json.dumps(payload), require_existing_code=True)
+
+
+def test_old_v1_fixture_migrates_without_existing_code() -> None:
+    envelope = parse_llm_findings(json.dumps(_valid_payload()))
+
+    assert envelope.findings[0].existing_code is None
 
 
 def _valid_payload() -> dict:

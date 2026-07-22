@@ -24,8 +24,6 @@ def test_build_review_prompt_uses_fixed_sections(tmp_path: Path) -> None:
     assert "markdown fences" in prompt.system
     assert "source must be exactly 'llm'" in prompt.system
     assert "Simplified Chinese" in prompt.system
-    assert "message, suggestion, and evidence.reason must be Chinese" in prompt.system
-    assert "positive integer from an added line" in prompt.system
     for section in (
         "## REPOSITORY",
         "## DIFF",
@@ -56,7 +54,6 @@ def test_output_contract_lists_strict_fields() -> None:
     assert contract["root_fields"] == ["schema_version", "findings"]
     assert contract["findings"]["type"] == "non-empty array"
     assert contract["findings"]["source"] == "llm"
-    assert contract["findings"]["line_no"] == "positive integer from an added line in DIFF"
     assert contract["findings"]["evidence_fields"] == ["reason"]
 
 

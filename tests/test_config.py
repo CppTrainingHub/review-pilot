@@ -56,6 +56,51 @@ ignore_paths = ["third_party/**"]
     assert config.tools["semgrep"].ignore_paths == ("third_party/**",)
 
 
+def test_reads_reflection_config(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        """
+[reflection]
+enabled = true
+confidence_threshold = "medium"
+severity_threshold = "P2"
+max_findings = 4
+max_tokens = 900
+review_all = true
+""",
+    )
+
+    reflection = load_project_config(tmp_path).reflection
+
+    assert reflection.enabled is True
+    assert reflection.confidence_threshold == "medium"
+    assert reflection.severity_threshold == "P2"
+    assert reflection.max_findings == 4
+    assert reflection.max_tokens == 900
+    assert reflection.review_all is True
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("confidence_threshold", '"urgent"', "confidence_threshold"),
+        ("severity_threshold", '"P9"', "severity_threshold"),
+        ("max_findings", "0", "positive integer"),
+        ("max_tokens", "0", "positive integer"),
+    ],
+)
+def test_rejects_invalid_reflection_config(
+    tmp_path: Path,
+    key: str,
+    value: str,
+    message: str,
+) -> None:
+    write_config(tmp_path, f"[reflection]\n{key} = {value}\n")
+
+    with pytest.raises(ConfigError, match=message):
+        load_project_config(tmp_path)
+
+
 def test_config_to_dict_is_json_serializable(tmp_path: Path) -> None:
     write_config(
         tmp_path,

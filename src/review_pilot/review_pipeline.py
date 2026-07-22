@@ -4,34 +4,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .code_index import build_code_index
 from .config import ConfigError, load_project_config
-from .context_pack import build_review_context_pack, validate_context_pack_dict
-from .context_selector import select_context_candidates
-from .diff_line_map import build_changed_line_map
 from .diff_parser import DiffParseError
 from .diff_reader import DiffReader
-from .evidence_guard import EvidenceGuardResult
-from .finding_merger import merge_findings
 from .git_client import GitClient, GitError, NotGitRepositoryError
-from .llm import (
-    LLMOutputError,
-    LLMProviderError,
-    StructuredReviewResult,
-    StructuredReviewer,
-    create_provider,
-)
-from .models import ContextBudgetManifest, ParsedDiff, RepoInfo
-from .project_detector import detect_project
-from .report_models import Finding, ReviewReport
+from .models import ParsedDiff, RepoInfo
+from .report_models import ReviewReport
 from .report_summary import should_fail_findings
 from .report_writer import write_report
-from .rule_engine import default_rule_engine
-from .token_budget import apply_token_budget
-from .tool_filter import ToolFilterResult, filter_tool_findings
-from .tool_models import ToolResult
-from .tool_registry import ToolRegistry
-from .tools.semgrep_tool import SEMGREP_TOOL_NAME, run_semgrep_tool
+from .review_engine import (
+    ReviewEngine,
+    ReviewEngineError,
+    ReviewEngineOptions,
+    ReviewInput,
+)
+from .tools.semgrep_tool import run_semgrep_tool
 
 
 ReviewProfileName = Literal["manual", "pre-commit", "pre-push"]
@@ -56,6 +43,10 @@ class ReviewPipelineOptions:
     debug_findings: bool = False
     fail_on: str | None = None
     max_context_tokens: int = 4000
+    strategy: str = "baseline"
+    dynamic_context: bool = False
+    snippet_location: bool = False
+    reflection: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,12 +84,6 @@ class EffectiveReviewProfile:
         }
 
 
-@dataclass(frozen=True)
-class ToolCollection:
-    results: list[ToolResult]
-    filter_result: ToolFilterResult | None
-
-
 class ReviewPipeline:
     def __init__(
         self,
@@ -112,69 +97,36 @@ class ReviewPipeline:
     def run(self) -> ReviewPipelineResult:
         effective = self._resolve_profile(self.options)
         repo_info, config, parsed_diff = self._load_inputs()
-        rule_findings = default_rule_engine(config).run(
-            parsed_diff,
-            repo_info=repo_info,
-        )
-
-        context: ContextBudgetManifest | None = None
-        llm_result: StructuredReviewResult | None = None
-        if effective.ai_enabled:
-            context = self._build_context(parsed_diff, repo_info, config)
-            pack = build_review_context_pack(
-                repo_info=repo_info,
-                config=config,
-                parsed_diff=parsed_diff,
-                rule_findings=rule_findings,
-                context=context,
+        try:
+            engine_result = ReviewEngine(
+                ReviewEngineOptions(
+                    provider=effective.provider,
+                    with_tools=effective.tools_enabled,
+                    include_out_of_diff=effective.include_out_of_diff,
+                    max_context_tokens=self.options.max_context_tokens,
+                    tool_runner=run_semgrep_tool,
+                    strategy=self.options.strategy,
+                    dynamic_context=self.options.dynamic_context,
+                    snippet_location=self.options.snippet_location,
+                    reflection=self.options.reflection,
+                )
+            ).run(
+                ReviewInput(
+                    repo_info=repo_info,
+                    config=config,
+                    parsed_diff=parsed_diff,
+                    input_source="local-staged",
+                    metadata={
+                        "profile": effective.name,
+                        "pipeline": "local-staged",
+                        "fail_on": effective.fail_on,
+                    },
+                )
             )
-            try:
-                validate_context_pack_dict(pack.to_dict())
-                llm_result = StructuredReviewer(
-                    create_provider(effective.provider)
-                ).review(pack)
-            except (ConfigError, LLMProviderError) as exc:
-                raise ReviewPipelineError(f"llm provider error: {exc}") from exc
-            except LLMOutputError as exc:
-                raise ReviewPipelineError(f"llm output error: {exc}") from exc
-            except ValueError as exc:
-                raise ReviewPipelineError(f"context pack error: {exc}") from exc
+        except ReviewEngineError as exc:
+            raise ReviewPipelineError(str(exc), exit_code=exc.exit_code) from exc
 
-        tool_collection = ToolCollection(results=[], filter_result=None)
-        if effective.tools_enabled:
-            tool_collection = self._collect_tool_findings(
-                repo_info,
-                config,
-                parsed_diff,
-                include_out_of_diff=effective.include_out_of_diff,
-            )
-
-        merge_result = merge_findings(
-            rule_findings=rule_findings,
-            tool_findings=(
-                list(tool_collection.filter_result.included_findings)
-                if tool_collection.filter_result is not None
-                else []
-            ),
-            llm_findings=(
-                list(llm_result.evidence.findings)
-                if llm_result is not None
-                else []
-            ),
-        )
-        report = ReviewReport(
-            findings=list(merge_result.findings),
-            repo_info=self._build_report_metadata(
-                repo_info=repo_info,
-                effective=effective,
-                context=context,
-                llm_result=llm_result,
-                evidence=llm_result.evidence if llm_result is not None else None,
-                tool_collection=tool_collection,
-            ),
-            config_source=config.source,
-            merge_summary=merge_result.summary.to_dict(),
-        )
+        report = engine_result.report
         rendered_output = self._render_result(report)
         output_path = self._write_output(rendered_output)
         exit_code = 1 if should_fail_findings(report.findings, effective.fail_on) else 0
@@ -184,14 +136,7 @@ class ReviewPipeline:
             rendered_output=rendered_output,
             output_path=output_path,
             exit_code=exit_code,
-            debug_payload=self._debug_payload(
-                rule_findings=rule_findings,
-                tool_collection=tool_collection,
-                llm_result=llm_result,
-                report=report,
-            )
-            if self.options.debug_findings
-            else None,
+            debug_payload=engine_result.debug_payload if self.options.debug_findings else None,
         )
 
     @staticmethod
@@ -242,107 +187,7 @@ class ReviewPipeline:
             raise ReviewPipelineError("no staged changes", exit_code=1)
         return repo_info, config, parsed_diff
 
-    def _build_context(self, parsed_diff, repo_info, config) -> ContextBudgetManifest:
-        try:
-            index = build_code_index(repo_info.root, config)
-            candidates = select_context_candidates(parsed_diff, index)
-            return apply_token_budget(
-                candidates,
-                parsed_diff,
-                repo_info.root,
-                self.options.max_context_tokens,
-            )
-        except ValueError as exc:
-            raise ReviewPipelineError(f"context pack error: {exc}") from exc
-
-    @staticmethod
-    def _collect_tool_findings(
-        repo_info: RepoInfo,
-        config,
-        parsed_diff: ParsedDiff,
-        *,
-        include_out_of_diff: bool,
-    ) -> ToolCollection:
-        tool_results: list[ToolResult] = []
-        tool_filter_result: ToolFilterResult | None = None
-        detection = detect_project(repo_info.root)
-        registry = ToolRegistry(detection, config)
-        try:
-            semgrep_tool = registry.get(SEMGREP_TOOL_NAME)
-        except KeyError:
-            semgrep_tool = None
-        if semgrep_tool is not None:
-            semgrep_result = run_semgrep_tool(semgrep_tool, repo_info.root)
-            tool_results.append(semgrep_result)
-            if semgrep_result.status == "success":
-                changed_lines = build_changed_line_map(parsed_diff)
-                tool_filter_result = filter_tool_findings(
-                    tool_results,
-                    changed_lines,
-                    include_out_of_diff=include_out_of_diff,
-                )
-        return ToolCollection(
-            results=tool_results,
-            filter_result=tool_filter_result,
-        )
-
-    @staticmethod
-    def _build_report_metadata(
-        *,
-        repo_info: RepoInfo,
-        effective: EffectiveReviewProfile,
-        context: ContextBudgetManifest | None,
-        llm_result: StructuredReviewResult | None,
-        evidence: EvidenceGuardResult | None,
-        tool_collection: ToolCollection,
-    ) -> dict[str, Any]:
-        metadata: dict[str, Any] = {
-            "root": repo_info.root,
-            "branch": repo_info.branch,
-            "head": repo_info.head,
-            "profile": effective.name,
-            "pipeline": "local-staged",
-            "ai_enabled": effective.ai_enabled,
-            "tools_enabled": effective.tools_enabled,
-            "include_out_of_diff": effective.include_out_of_diff,
-            "fail_on": effective.fail_on,
-            "tool_results": [item.to_dict() for item in tool_collection.results],
-            "tool_filter": (
-                tool_collection.filter_result.to_dict()
-                if tool_collection.filter_result is not None
-                else None
-            ),
-        }
-        if context is not None:
-            metadata["context"] = {
-                "used": len(context.context_used),
-                "omitted": len(context.context_omitted),
-                "used_tokens": context.used_tokens,
-                "max_context_tokens": context.max_context_tokens,
-            }
-        if llm_result is not None:
-            metadata.update(
-                {
-                    "provider": llm_result.response.provider,
-                    "model": llm_result.response.model,
-                    "evidence_summary": (
-                        evidence.summary if evidence is not None else None
-                    ),
-                    "dropped_llm_findings": (
-                        [
-                            decision.to_dict()
-                            for decision in evidence.dropped_findings
-                        ]
-                        if evidence is not None
-                        else []
-                    ),
-                }
-            )
-        return metadata
-
     def _render_result(self, report: ReviewReport) -> str:
-        if self.options.debug_findings:
-            return ""
         try:
             return write_report(report, self.options.output_format)
         except ValueError as exc:
@@ -355,44 +200,3 @@ class ReviewPipeline:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(rendered_output + "\n", encoding="utf-8")
         return output_path
-
-    @staticmethod
-    def _debug_payload(
-        *,
-        rule_findings: list[Finding],
-        tool_collection: ToolCollection,
-        llm_result: StructuredReviewResult | None,
-        report: ReviewReport,
-    ) -> dict[str, Any]:
-        llm_findings = (
-            list(llm_result.evidence.findings)
-            if llm_result is not None
-            else []
-        )
-        tool_findings = (
-            list(tool_collection.filter_result.included_findings)
-            if tool_collection.filter_result is not None
-            else []
-        )
-        return {
-            "findings": [
-                finding.to_dict()
-                for finding in [*rule_findings, *tool_findings, *llm_findings]
-            ],
-            "merge_summary": report.merge_summary,
-            "merged_findings": [finding.to_dict() for finding in report.findings],
-            "tool_results": [
-                result.to_dict()
-                for result in tool_collection.results
-            ],
-            "tool_filter": (
-                tool_collection.filter_result.to_dict()
-                if tool_collection.filter_result is not None
-                else {
-                    "total_tool_findings": 0,
-                    "included_count": 0,
-                    "out_of_diff_count": 0,
-                    "out_of_diff_findings": [],
-                }
-            ),
-        }

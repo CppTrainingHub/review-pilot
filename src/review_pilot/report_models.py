@@ -44,6 +44,7 @@ class Finding:
     rule_id: str | None = None
     evidence: dict[str, Any] | None = None
     suggestion: str | None = None
+    existing_code: str | None = None
 
     def __post_init__(self) -> None:
         if self.file_path is not None and not self.file_path:

@@ -76,6 +76,8 @@ def test_run_github_action_dry_run_writes_artifacts(tmp_path: Path) -> None:
     payload = json.loads(result.json_path.read_text(encoding="utf-8"))
     assert "# Review Pilot Report" in markdown
     assert payload["repo_info"]["pipeline"] == "github-action-dry-run"
+    assert payload["repo_info"]["engine"] == "review-engine"
+    assert payload["repo_info"]["input_source"] == "github-pr"
     assert payload["repo_info"]["repository"] == "octo-org/review-demo"
     assert payload["repo_info"]["pull_request"] == 42
     assert payload["summary"]["total_findings"] >= 1
@@ -150,6 +152,8 @@ def test_run_github_action_provider_merges_llm_findings(
 
     payload = json.loads(result.json_path.read_text(encoding="utf-8"))
     assert payload["repo_info"]["pipeline"] == "github-action"
+    assert payload["repo_info"]["engine"] == "review-engine"
+    assert payload["repo_info"]["input_source"] == "github-pr"
     assert payload["repo_info"]["provider"] == "fake"
     assert payload["repo_info"]["model"] == "fake-review-model"
     assert payload["merge_summary"]["source_counts"]["llm"] == 1

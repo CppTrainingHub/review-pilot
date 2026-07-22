@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
 import pytest
 
 from review_pilot.context_pack import ReviewContextPack
@@ -158,7 +160,58 @@ def test_guard_reports_mixed_summary_and_preserves_dropped_finding() -> None:
     assert payload["dropped_findings"][0]["status"] == "dropped"
 
 
-def _finding(*, file_path: str, line_no: int) -> Finding:
+def test_snippet_location_verifies_hunk_and_replaces_model_line() -> None:
+    result = guard_llm_findings(
+        (_finding(file_path="src/app.py", line_no=99, existing_code="print('debug')"),),
+        _context_pack(),
+        snippet_location=True,
+    )
+
+    decision = result.decisions[0]
+    assert decision.status == VERIFIED
+    assert decision.finding.line_no == 2
+    assert decision.finding.evidence["location_decision"]["status"] == "matched"
+    assert result.summary["location_matched"] == 1
+    assert result.summary["location_failure_rate"] == 0.0
+
+
+def test_snippet_location_falls_back_to_new_file(tmp_path: Path) -> None:
+    target = tmp_path / "src/app.py"
+    target.parent.mkdir()
+    target.write_text("def run():\n    return safe()\n", encoding="utf-8")
+    pack = replace(_context_pack(), repo_info={**_context_pack().repo_info, "root": str(tmp_path)})
+
+    result = guard_llm_findings(
+        (_finding(file_path="src/app.py", line_no=77, existing_code="return safe()"),),
+        pack,
+        snippet_location=True,
+    )
+
+    decision = result.decisions[0]
+    assert decision.status == DOWNGRADED
+    assert decision.finding.line_no == 2
+    assert decision.reference is not None
+    assert decision.reference.source == "snippet_file_fallback"
+    assert decision.finding.confidence == "low"
+
+
+def test_snippet_location_drops_missing_existing_code() -> None:
+    result = guard_llm_findings(
+        (_finding(file_path="src/app.py", line_no=2),),
+        _context_pack(),
+        snippet_location=True,
+    )
+
+    assert result.decisions[0].status == DROPPED
+    assert "existing_code" in result.decisions[0].reason
+
+
+def _finding(
+    *,
+    file_path: str,
+    line_no: int,
+    existing_code: str | None = None,
+) -> Finding:
     return Finding(
         message="Review this reference.",
         file_path=file_path,
@@ -169,6 +222,7 @@ def _finding(*, file_path: str, line_no: int) -> Finding:
         confidence="high",
         evidence={"reason": "The referenced line may be incorrect."},
         suggestion="Update the referenced line.",
+        existing_code=existing_code,
     )
 
 

@@ -48,10 +48,14 @@ class GitLabProvider:
         timeout: float = 20.0,
     ) -> None:
         self.token = token if token is not None else os.environ.get("GITLAB_TOKEN")
-        self.api_base_url = (
+        configured_api_base_url = (
             api_base_url
             or os.environ.get("GITLAB_API_BASE_URL")
             or os.environ.get("CI_API_V4_URL")
+        )
+        self._api_base_url_is_configured = bool(configured_api_base_url)
+        self.api_base_url = (
+            configured_api_base_url
             or "https://gitlab.com/api/v4"
         ).rstrip("/")
         self.transport = transport or urlopen
@@ -59,6 +63,8 @@ class GitLabProvider:
 
     def fetch_pull_request(self, url: str) -> PullRequestInfo:
         parsed = parse_gitlab_mr_url(url)
+        if not self._api_base_url_is_configured:
+            self.api_base_url = f"{parsed.base_url}/api/v4"
         return self.fetch_merge_request(parsed.project_path, parsed.iid)
 
     def fetch_merge_request(self, project_id_or_path: str | int, iid: int) -> PullRequestInfo:

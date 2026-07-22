@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import TextIO
 
 from . import __version__
+from .benchmark import BenchmarkError, run_aacr_benchmark
+from .benchmark.reports import compare_benchmark_reports
 from .code_index import build_code_index
 from .command_runner import CommandRunnerError, run_registered_tool
 from .config import ConfigError, LLMConfig, load_project_config
@@ -272,6 +274,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="fake",
         help="Provider metadata to show with the prompt preview.",
     )
+    prompt_preview_parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Preview the contract that requires existing_code.",
+    )
     evidence_check_parser = subparsers.add_parser(
         "evidence-check",
         help="Validate saved LLM findings against staged review evidence.",
@@ -286,6 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--input",
         required=True,
         help="Path to a file containing structured LLM findings JSON.",
+    )
+    evidence_check_parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Use deterministic existing_code location before evidence verification.",
     )
     review_parser = subparsers.add_parser(
         "review",
@@ -340,6 +352,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         choices=supported_providers(),
         help="Run the formal LLM provider with an auditable context pack.",
+    )
+    review_parser.add_argument(
+        "--strategy",
+        choices=("baseline", "review-units"),
+        default="baseline",
+        help="Choose one whole-diff review or deterministic ReviewUnit grouping.",
+    )
+    review_parser.add_argument(
+        "--dynamic-context",
+        action="store_true",
+        help="Allow bounded read-only context tool calls during the review.",
+    )
+    review_parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Let the program locate existing_code and calculate the final line number.",
+    )
+    review_parser.add_argument(
+        "--reflection",
+        action="store_true",
+        help="Run the configured Reflection quality filter after Evidence Guard.",
     )
     review_parser.add_argument(
         "--profile",
@@ -476,6 +509,87 @@ def build_parser() -> argparse.ArgumentParser:
         default="fake",
         help="LLM provider to use. fake is deterministic and safe for tests.",
     )
+    benchmark_parser = subparsers.add_parser(
+        "benchmark",
+        help="Run repository-level review benchmarks.",
+    )
+    benchmark_subparsers = benchmark_parser.add_subparsers(
+        dest="benchmark_command"
+    )
+    aacr_parser = benchmark_subparsers.add_parser(
+        "aacr",
+        help="Run the AACR-Bench baseline evaluator.",
+    )
+    aacr_parser.add_argument(
+        "--dataset",
+        required=True,
+        help="Path to AACR-Bench positive_samples.json.",
+    )
+    aacr_parser.add_argument(
+        "--sample-set",
+        help="Path to a fixed sample-set JSON file.",
+    )
+    aacr_parser.add_argument(
+        "--limit",
+        type=int,
+        help="Run at most this many selected cases.",
+    )
+    aacr_parser.add_argument(
+        "--language",
+        help="Only run cases whose project language matches this value.",
+    )
+    aacr_parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Provider used for the review run; omitted means use REVIEW_PILOT_LLM_PROVIDER.",
+    )
+    aacr_parser.add_argument(
+        "--strategy",
+        choices=("baseline", "review-units"),
+        default="baseline",
+        help="Review strategy used for each benchmark case.",
+    )
+    aacr_parser.add_argument(
+        "--dynamic-context",
+        action="store_true",
+        help="Allow bounded read-only context tool calls during each case.",
+    )
+    aacr_parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Locate existing_code deterministically before evaluating line metrics.",
+    )
+    aacr_parser.add_argument(
+        "--reflection",
+        action="store_true",
+        help="Run the Reflection quality filter for eligible LLM findings.",
+    )
+    aacr_parser.add_argument(
+        "--output-dir",
+        default="benchmark-results/aacr",
+        help="Directory for per-case outputs and report files.",
+    )
+    aacr_parser.add_argument(
+        "--cache-dir",
+        help="Directory for cached benchmark repositories.",
+    )
+    aacr_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse completed per-case results in the output directory.",
+    )
+    aacr_parser.add_argument(
+        "--max-context-tokens",
+        type=int,
+        default=4000,
+        help="Maximum estimated repository context per case.",
+    )
+    compare_parser = benchmark_subparsers.add_parser(
+        "compare",
+        help="Compare the benchmark reports.",
+    )
+    compare_parser.add_argument("result_dirs", nargs=5)
+    compare_parser.add_argument("--output", required=True)
     return parser
 
 
@@ -533,6 +647,27 @@ def build_review_parser() -> argparse.ArgumentParser:
         "--provider",
         choices=supported_providers(),
         help="Run the formal LLM provider with an auditable context pack.",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=("baseline", "review-units"),
+        default="baseline",
+        help="Choose one whole-diff review or deterministic ReviewUnit grouping.",
+    )
+    parser.add_argument(
+        "--dynamic-context",
+        action="store_true",
+        help="Allow bounded read-only context tool calls during the review.",
+    )
+    parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Let the program locate existing_code and calculate the final line number.",
+    )
+    parser.add_argument(
+        "--reflection",
+        action="store_true",
+        help="Run the configured Reflection quality filter after Evidence Guard.",
     )
     parser.add_argument(
         "--profile",
@@ -711,6 +846,11 @@ def build_prompt_preview_parser() -> argparse.ArgumentParser:
         default="fake",
         help="Provider metadata to show with the prompt preview.",
     )
+    parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Preview the contract that requires existing_code.",
+    )
     return parser
 
 
@@ -730,6 +870,60 @@ def build_evidence_check_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to a file containing structured LLM findings JSON.",
     )
+    parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Use deterministic existing_code location before evidence verification.",
+    )
+    return parser
+
+
+def build_benchmark_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="review-pilot benchmark",
+        description="Run repository-level review benchmarks.",
+    )
+    subparsers = parser.add_subparsers(dest="benchmark_command")
+    aacr_parser = subparsers.add_parser(
+        "aacr",
+        help="Run the AACR-Bench baseline evaluator.",
+    )
+    aacr_parser.add_argument("--dataset", required=True, help="Path to AACR-Bench positive_samples.json.")
+    aacr_parser.add_argument("--sample-set", help="Path to a fixed sample-set JSON file.")
+    aacr_parser.add_argument("--limit", type=int, help="Run at most this many selected cases.")
+    aacr_parser.add_argument("--language", help="Only run cases for this language.")
+    aacr_parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Provider used for the review run; omitted means use REVIEW_PILOT_LLM_PROVIDER.",
+    )
+    aacr_parser.add_argument(
+        "--strategy",
+        choices=("baseline", "review-units"),
+        default="baseline",
+        help="Review strategy used for each benchmark case.",
+    )
+    aacr_parser.add_argument(
+        "--dynamic-context",
+        action="store_true",
+        help="Allow bounded read-only context tool calls during each case.",
+    )
+    aacr_parser.add_argument(
+        "--snippet-location",
+        action="store_true",
+        help="Locate existing_code deterministically before evaluating line metrics.",
+    )
+    aacr_parser.add_argument("--reflection", action="store_true")
+    aacr_parser.add_argument("--output-dir", default="benchmark-results/aacr")
+    aacr_parser.add_argument("--cache-dir", help="Directory for cached benchmark repositories.")
+    aacr_parser.add_argument("--resume", action="store_true")
+    aacr_parser.add_argument("--max-context-tokens", type=int, default=4000)
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare the benchmark reports.",
+    )
+    compare_parser.add_argument("result_dirs", nargs=5)
+    compare_parser.add_argument("--output", required=True)
     return parser
 
 
@@ -912,7 +1106,8 @@ def _run_review(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int
             return exit_code
         try:
             result = StructuredReviewer(
-                create_provider(args.provider)
+                create_provider(args.provider),
+                snippet_location=args.snippet_location,
             ).review(pack)
         except (ConfigError, LLMProviderError) as exc:
             print(f"llm provider error: {exc}", file=stderr)
@@ -949,6 +1144,10 @@ def _run_review(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int
                 output=args.output,
                 debug_findings=args.debug_findings,
                 fail_on=args.fail_on,
+                strategy=args.strategy,
+                dynamic_context=args.dynamic_context,
+                snippet_location=args.snippet_location,
+                reflection=args.reflection,
             )
         ).run()
     except ReviewPipelineError as exc:
@@ -971,7 +1170,7 @@ def _run_review_pr(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> 
         return 2
 
     if not args.no_ai:
-        print("review-pr currently prepares PR input; pass --no-ai.", file=stderr)
+        print("review-pr currently prepares PR input; pass --no-ai for a dry-run review.", file=stderr)
         return 2
 
     try:
@@ -1301,7 +1500,7 @@ def _run_prompt_preview(
     except (ConfigError, LLMProviderError) as exc:
         print(f"llm provider error: {exc}", file=stderr)
         return 2
-    prompt = build_review_prompt(pack)
+    prompt = build_review_prompt(pack, snippet_location=args.snippet_location)
     print(f"PROVIDER\n{provider.name} / {provider.model}", file=stdout)
     print(f"\nSYSTEM\n{prompt.system}", file=stdout)
     print(f"\nUSER\n{prompt.user}", file=stdout)
@@ -1330,12 +1529,19 @@ def _run_evidence_check(
         )
         return 2
     try:
-        envelope = parse_llm_findings(content)
+        envelope = parse_llm_findings(
+            content,
+            require_existing_code=args.snippet_location,
+        )
     except LLMOutputError as exc:
         print(f"llm output error: {exc}", file=stderr)
         return 2
 
-    evidence = guard_llm_findings(envelope.findings, pack)
+    evidence = guard_llm_findings(
+        envelope.findings,
+        pack,
+        snippet_location=args.snippet_location,
+    )
     print(
         json.dumps(
             {
@@ -1348,6 +1554,54 @@ def _run_evidence_check(
         file=stdout,
     )
     return 1 if evidence.dropped_findings else 0
+
+
+def _run_benchmark(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    if args.benchmark_command == "compare":
+        try:
+            payload = compare_benchmark_reports(args.result_dirs, args.output)
+        except ValueError as exc:
+            print(f"benchmark error: {exc}", file=stderr)
+            return 2
+        print(f"groups: {', '.join(payload['groups'])}", file=stdout)
+        print(f"report_markdown: {args.output}", file=stdout)
+        print(f"report_json: {Path(args.output).with_suffix('.json')}", file=stdout)
+        return 0
+    if args.benchmark_command != "aacr":
+        print("benchmark requires a subcommand: aacr or compare", file=stderr)
+        return 2
+    try:
+        result = run_aacr_benchmark(
+            dataset_path=args.dataset,
+            sample_set_path=args.sample_set,
+            output_dir=args.output_dir,
+            provider=args.provider,
+            limit=args.limit,
+            language=args.language,
+            resume=args.resume,
+            cache_dir=args.cache_dir,
+            max_context_tokens=args.max_context_tokens,
+            strategy=args.strategy,
+            dynamic_context=args.dynamic_context,
+            snippet_location=args.snippet_location,
+            reflection=args.reflection,
+        )
+    except (BenchmarkError, ValueError) as exc:
+        print(f"benchmark error: {exc}", file=stderr)
+        return 2
+
+    summary = result.report["summary"]
+    print(f"completed_cases: {summary['completed_cases']}", file=stdout)
+    print(f"failed_cases: {summary['failed_cases']}", file=stdout)
+    print(f"precision: {summary['precision']}", file=stdout)
+    print(f"recall: {summary['recall']}", file=stdout)
+    print(f"f1: {summary['f1']}", file=stdout)
+    print(f"line_accuracy: {summary['line_accuracy']}", file=stdout)
+    if "location_failure_rate" in summary:
+        print(f"location_failure_rate: {summary['location_failure_rate']}", file=stdout)
+    print(f"report_json: {result.report_json_path}", file=stdout)
+    print(f"report_markdown: {result.report_markdown_path}", file=stdout)
+    return result.exit_code
 
 
 def _registry_from_cwd(stderr: TextIO):
@@ -1582,6 +1836,14 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO | None = None, stderr
         build_evidence_check_parser().print_help(out)
         return 0
 
+    if command_args in (
+        ["benchmark"],
+        ["benchmark", "--help"],
+        ["benchmark", "-h"],
+    ):
+        build_benchmark_parser().print_help(out)
+        return 0
+
     args = parser.parse_args(command_args)
 
     if args.command == "doctor":
@@ -1625,6 +1887,9 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO | None = None, stderr
 
     if args.command == "evidence-check":
         return _run_evidence_check(args, out, err)
+
+    if args.command == "benchmark":
+        return _run_benchmark(args, out, err)
 
     if args.command == "review":
         return _run_review(args, out, err)

@@ -1,0 +1,22 @@
+[
+  {
+    "githubPrUrl": "https://github.com/example/review-fixture/pull/1",
+    "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "target_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "project_main_language": "Python",
+    "change_line_count": 2,
+    "comments": [
+      {
+        "is_ai_comment": false,
+        "note": "The changed line needs a focused test.",
+        "path": "b/src/app.py",
+        "side": "right",
+        "source_model": "human",
+        "from_line": 12,
+        "to_line": 13,
+        "category": "Maintainability",
+        "context": "File Level"
+      }
+    ]
+  }
+]

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-VALID_CONFIG_TOP_LEVEL_KEYS = {"ignore_paths", "rules", "tools"}
+VALID_CONFIG_TOP_LEVEL_KEYS = {"ignore_paths", "rules", "tools", "reflection"}
 VALID_RULE_KEYS = {
     "enabled",
     "max_added_lines",
@@ -18,6 +18,7 @@ VALID_RULE_KEYS = {
 }
 VALID_TOOL_KEYS = {"enabled", "timeout_seconds", "severity_threshold", "ignore_paths"}
 VALID_SEVERITY_THRESHOLDS = {"P0", "P1", "P2", "P3"}
+VALID_REFLECTION_CONFIDENCES = {"low", "medium", "high"}
 
 
 class ConfigError(ValueError):
@@ -196,11 +197,70 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
+class ReflectionConfig:
+    enabled: bool = False
+    confidence_threshold: str = "low"
+    severity_threshold: str = "P1"
+    max_findings: int = 20
+    max_tokens: int = 12000
+    review_all: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReflectionConfig":
+        allowed = {
+            "enabled",
+            "confidence_threshold",
+            "severity_threshold",
+            "max_findings",
+            "max_tokens",
+            "review_all",
+        }
+        _reject_unknown_keys(data, allowed, "reflection")
+        confidence_threshold = data.get("confidence_threshold", "low")
+        if confidence_threshold not in VALID_REFLECTION_CONFIDENCES:
+            raise ConfigError(
+                "reflection.confidence_threshold must be one of "
+                f"{sorted(VALID_REFLECTION_CONFIDENCES)}"
+            )
+        severity_threshold = data.get("severity_threshold", "P1")
+        if severity_threshold not in VALID_SEVERITY_THRESHOLDS:
+            raise ConfigError(
+                "reflection.severity_threshold must be one of "
+                f"{sorted(VALID_SEVERITY_THRESHOLDS)}"
+            )
+        return cls(
+            enabled=_require_bool(data.get("enabled", False), "reflection.enabled"),
+            confidence_threshold=confidence_threshold,
+            severity_threshold=severity_threshold,
+            max_findings=_require_positive_int(
+                data.get("max_findings", 20),
+                "reflection.max_findings",
+            ),
+            max_tokens=_require_positive_int(
+                data.get("max_tokens", 12000),
+                "reflection.max_tokens",
+            ),
+            review_all=_require_bool(data.get("review_all", False), "reflection.review_all"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "confidence_threshold": self.confidence_threshold,
+            "severity_threshold": self.severity_threshold,
+            "max_findings": self.max_findings,
+            "max_tokens": self.max_tokens,
+            "review_all": self.review_all,
+        }
+
+
+@dataclass(frozen=True)
 class ReviewPilotConfig:
     source: str = "default"
     ignore_paths: tuple[str, ...] = field(default_factory=tuple)
     rules: dict[str, RuleConfig] = field(default_factory=dict)
     tools: dict[str, ToolConfig] = field(default_factory=dict)
+    reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
 
     @classmethod
     def default(cls) -> "ReviewPilotConfig":
@@ -223,11 +283,15 @@ class ReviewPilotConfig:
                 tool_name,
                 _require_table(tool_data, f"tools.{tool_name}"),
             )
+        reflection = ReflectionConfig.from_dict(
+            _require_table(data.get("reflection", {}), "reflection")
+        )
         return cls(
             source=source,
             ignore_paths=ignore_paths,
             rules=rules,
             tools=tools,
+            reflection=reflection,
         )
 
     def rule(self, rule_id: str) -> RuleConfig:
@@ -242,6 +306,7 @@ class ReviewPilotConfig:
             "ignore_paths": list(self.ignore_paths),
             "rules": {rule_id: config.to_dict() for rule_id, config in sorted(self.rules.items())},
             "tools": {name: config.to_dict() for name, config in sorted(self.tools.items())},
+            "reflection": self.reflection.to_dict(),
         }
 
 

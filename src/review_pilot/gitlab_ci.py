@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .config import ReviewPilotConfig
 from .git_providers import GitLabProvider, GitProviderError
-from .github_action import GitHubActionError, build_artifact_report
+from .models import RepoInfo
 from .pr_commenter import (
     CommentAction,
     CommentError,
@@ -18,6 +19,7 @@ from .pr_models import PullRequestInfo
 from .report_models import ReviewReport
 from .report_summary import should_fail_findings
 from .report_writer import write_report
+from .review_engine import ReviewEngine, ReviewEngineError, ReviewEngineOptions, ReviewInput
 from .workspace import WorkspaceError, WorkspacePlan, build_existing_workspace_plan, prepare_workspace
 
 
@@ -165,31 +167,13 @@ def run_gitlab_ci(
     except WorkspaceError as exc:
         raise GitLabCIError(f"workspace error: {exc}") from exc
 
-    try:
-        report = build_artifact_report(
-            context=context,
-            pr_info=pr_info,
-            workspace=workspace,
-            dry_run=dry_run,
-            llm_provider=llm_provider,
-        )
-    except GitHubActionError as exc:
-        message = str(exc).replace("github-action", "gitlab-ci")
-        raise GitLabCIError(message) from exc
-    report.repo_info = {
-        **(report.repo_info or {}),
-        "pipeline": "gitlab-ci-dry-run" if dry_run else "gitlab-ci",
-        "project_id": context.project_id,
-        "repository": context.project_path,
-        "pull_request": context.merge_request_iid,
-        "base_ref": pr_info.base.ref,
-        "base_sha": pr_info.base.sha,
-        "head_ref": pr_info.head.ref,
-        "head_sha": pr_info.head.sha,
-        "merge_request_url": context.merge_request_url,
-        "pipeline_id": context.pipeline_id,
-        "job_id": context.job_id,
-    }
+    report = _build_gitlab_report(
+        context=context,
+        pr_info=pr_info,
+        workspace=workspace,
+        dry_run=dry_run,
+        llm_provider=llm_provider,
+    )
 
     artifact_dir = Path(output_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -224,6 +208,55 @@ def run_gitlab_ci(
     )
 
 
+def _build_gitlab_report(
+    *,
+    context: GitLabCIContext,
+    pr_info: PullRequestInfo,
+    workspace: WorkspacePlan,
+    dry_run: bool,
+    llm_provider: str | None,
+) -> ReviewReport:
+    if dry_run and llm_provider is not None:
+        raise GitLabCIError("gitlab-ci --provider requires a real workspace; remove --dry-run")
+
+    metadata = {
+        "pipeline": "gitlab-ci-dry-run" if dry_run else "gitlab-ci",
+        "event_name": context.event_name,
+        "project_id": context.project_id,
+        "repository": context.project_path,
+        "pull_request": context.merge_request_iid,
+        "base_ref": pr_info.base.ref,
+        "base_sha": pr_info.base.sha,
+        "head_ref": pr_info.head.ref,
+        "head_sha": pr_info.head.sha,
+        "merge_request_url": context.merge_request_url,
+        "pipeline_id": context.pipeline_id,
+        "job_id": context.job_id,
+        "workspace_path": workspace.workspace_path,
+        "artifact_markdown": "review-report.md",
+        "artifact_json": "review-report.json",
+    }
+    review_input = ReviewInput(
+        repo_info=RepoInfo(
+            root=workspace.workspace_path,
+            branch=pr_info.head.ref,
+            head=pr_info.head.sha,
+            has_staged_changes=False,
+            has_unstaged_changes=False,
+        ),
+        config=ReviewPilotConfig.default(),
+        parsed_diff=pr_info.parsed_diff,
+        input_source="gitlab-mr",
+        metadata=metadata,
+    )
+    try:
+        return ReviewEngine(
+            ReviewEngineOptions(provider=llm_provider)
+        ).run(review_input).report
+    except ReviewEngineError as exc:
+        raise GitLabCIError(str(exc)) from exc
+
+
 def _build_gitlab_workspace_plan(
     pr_info: PullRequestInfo,
     dry_run: bool,
@@ -246,7 +279,11 @@ def _build_gitlab_workspace_plan(
         )
     from .workspace import build_workspace_plan
 
-    plan = build_workspace_plan(pr_info, parent_dir=Path(".review-pilot") / "workspaces", dry_run=dry_run)
+    plan = build_workspace_plan(
+        pr_info,
+        parent_dir=Path(".review-pilot") / "workspaces",
+        dry_run=dry_run,
+    )
     return WorkspacePlan(
         workspace_path=plan.workspace_path,
         repo_clone_url=plan.repo_clone_url,
